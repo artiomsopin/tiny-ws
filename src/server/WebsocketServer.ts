@@ -1,20 +1,21 @@
-import { createServer } from "http";
+import { createServer, IncomingHttpHeaders, IncomingMessage } from "http";
 import * as crypto from "crypto";
 import Stream from "stream";
-import { ConnectionHeadersChecker } from "../validation/ConnectionHeadersChecker";
+import { HandshakeHeadersValidator as HandshakeHeadersValidator } from "../validation/HandshakeHeadersValidator";
 import { WebSocketOptions } from "./interfaces/WebSocketOptions";
-import { ConnectionHeaders } from "../constants/ConnectionHeaders.enum";
-import { ConnectionHeadersValues } from "../constants/ConnectionHeadersValue.enum";
+import { HandshakeHeaders } from "../constants/HandshakeHeaders.enum";
+import { HandshakeHeadersValues } from "../constants/HandshakeHeadersValue.enum";
 import { OpCodes } from "../constants/OpCodes";
 import { FrameParser } from "../frame/FrameParser";
 import { FrameEncoder } from "../frame/FrameEncoder";
+import { ParsedFrame } from "../frame/interfaces/ParsedFrame";
 
 export class WebSocketServer {
   private httpServer = createServer();
+  private frameEncoder = new FrameEncoder();
 
   constructor(options: WebSocketOptions) {
     this.connectionHandler();
-
     this.httpServer.listen(options.port, () => {
       console.log(`WebSocket server is running on port ${options.port}`);
     });
@@ -28,52 +29,41 @@ export class WebSocketServer {
 
   private connectionHandler() {
     this.httpServer.on("upgrade", (req, socket, head) => {
-      let userSecWsKey: string;
-
-      try {
-        const headersChecker = new ConnectionHeadersChecker(req.headers);
-        userSecWsKey = headersChecker.validate();
-      } catch (e) {
-        socket.end("HTTP/1.1 400 Bad Request");
+      if (!this.validateClient(req, socket)) {
         return;
       }
-
-      const secWsAcceptHeader = this.generateAcceptValue(userSecWsKey);
-      this.connectClient(socket, secWsAcceptHeader);
-
-      socket.on("data", (buffer) => {
-        console.log("Raw data: ", buffer);
-        try {
-          const parser = new FrameParser(buffer);
-          const frame = parser.parse();
-          console.log("Parsed frame:", frame);
-
-          if (frame.opCode === OpCodes.TEXT) {
-            console.log("Received message: ", frame.payload);
-          } else if (frame.opCode === OpCodes.BINARY) {
-            console.log("Received binary data");
-          } else {
-            console.log("Other frame type:", frame.opCode);
-          }
-        } catch (err) {
-          console.error("Error parsing frame:", err);
-        }
-      });
-      socket.on("error", (err) => {
-        console.error("Socket error: ", err);
-      });
-
-      const encoder = new FrameEncoder();
-      socket.write(encoder.encode("Hi there!"));
+      this.connectClient(socket, req.headers);
+      this.subscribeToEvents(socket);
+      socket.write(this.frameEncoder.encode("Hi there!"));
     });
   }
 
-  private connectClient(socket: Stream.Duplex, secWebSocketAccept: string) {
+  private validateClient(req: IncomingMessage, socket: Stream.Duplex): boolean {
+    try {
+      const headersValidator = new HandshakeHeadersValidator(req.headers);
+      return headersValidator.validate();
+    } catch (e) {
+      socket.end("HTTP/1.1 400 Bad Request");
+      console.error("Invalid headers: ", e);
+      return false;
+    }
+  }
+
+  private connectClient(socket: Stream.Duplex, headers: IncomingHttpHeaders) {
+    // TODO: move to a separate method
+    const clientSecWsKey = headers[HandshakeHeaders.SecWebSocketKey];
+    if (!clientSecWsKey) {
+      socket.end("HTTP/1.1 400 Bad Request");
+      console.error("Missing Sec-WebSocket-Key header");
+      return;
+    }
+
+    const secWsAcceptHeader = this.generateAcceptValue(clientSecWsKey);
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\n` +
-        `${ConnectionHeaders.Upgrade}: ${ConnectionHeadersValues.Upgrade}\r\n` +
-        `${ConnectionHeaders.Connection}: ${ConnectionHeadersValues.Connection}\r\n` +
-        `${ConnectionHeaders.SecWebSocketAccept}: ${secWebSocketAccept}\r\n\r\n`
+        `${HandshakeHeaders.Upgrade}: ${HandshakeHeadersValues.Upgrade}\r\n` +
+        `${HandshakeHeaders.Connection}: ${HandshakeHeadersValues.Connection}\r\n` +
+        `${HandshakeHeaders.SecWebSocketAccept}: ${secWsAcceptHeader}\r\n\r\n`
     );
   }
 
@@ -83,5 +73,35 @@ export class WebSocketServer {
       .createHash("sha1")
       .update(secKey + rfcAcceptKey)
       .digest("base64");
+  }
+
+  private subscribeToEvents(socket: Stream.Duplex) {
+    socket.on("data", (buffer) => {
+      console.log("Raw data: ", buffer);
+      this.parseFrame(buffer);
+    });
+    socket.on("error", (err) => {
+      console.error("Socket error: ", err);
+    });
+  }
+
+  private parseFrame(buffer: Buffer) {
+    try {
+      const parser = new FrameParser(buffer);
+      const frame = parser.parse();
+      this.LogAndHandleOpCode(frame);
+    } catch (err) {
+      console.error("Error parsing frame:", err);
+    }
+  }
+
+  private LogAndHandleOpCode(frame: ParsedFrame) {
+    if (frame.opCode === OpCodes.TEXT) {
+      console.log("Received message: ", frame.payload);
+    } else if (frame.opCode === OpCodes.BINARY) {
+      console.log("Received binary data");
+    } else {
+      console.log("Other frame type:", frame.opCode);
+    }
   }
 }

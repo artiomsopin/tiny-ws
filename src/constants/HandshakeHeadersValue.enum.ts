@@ -1,4 +1,4 @@
-export enum ConnectionHeadersValues {
+export enum HandshakeHeadersValues {
   Upgrade = "websocket",
   Connection = "upgrade",
 }
