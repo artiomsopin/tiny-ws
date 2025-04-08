@@ -1,6 +1,6 @@
-import { FirsByteData } from "./interfaces/FirstByteData";
+import { FirstByte } from "./interfaces/FirstByte";
 import { ParsedFrame } from "./interfaces/ParsedFrame";
-import { SecondByteData } from "./interfaces/SecondByteData";
+import { SecondByte } from "./interfaces/SecondByte";
 
 export class FrameParser {
   private offset = 0;
@@ -10,41 +10,33 @@ export class FrameParser {
     this.buffer = buffer;
   }
 
-  private parseWebSocketFrame(): ParsedFrame {
+  public parse(): ParsedFrame {
     const firstByteData = this.getFirstByteData();
     const secondByteData = this.getSecondByteData();
 
-    let payloadLength = secondByteData.payloadLength;
+    let payloadLength = this.adjustPayloadLength(secondByteData.payloadLength);
 
-    this.moveOffsetIfPayloadTooLong(payloadLength);
-
-    // Если используется маскирование, считываем маску
     let maskKey = Buffer.alloc(4);
     if (secondByteData.mask) {
       maskKey = this.buffer.slice(this.offset, this.offset + 4);
       this.offset += 4;
     }
 
-    // Считываем данные
     const payload = this.buffer.slice(this.offset, this.offset + payloadLength);
 
-    // Применяем маску, если она присутствует
     if (secondByteData.mask) {
-      for (let i = 0; i < payload.length; i++) {
-        payload[i] ^= maskKey[i % 4];
-      }
+      this.decodePayload(payload, maskKey);
     }
 
-    // Возвращаем разобранный фрейм
     return {
       fin: firstByteData.fin,
       rsv: firstByteData.rsv,
       opCode: firstByteData.opCode,
-      payload: payload.toString(), // Преобразуем данные в строку, если это текст
+      payload: payload.toString(),
     };
   }
 
-  private getFirstByteData(): FirsByteData {
+  private getFirstByteData(): FirstByte {
     const firstByte = this.buffer.readUInt8(this.offset);
     this.offset++;
 
@@ -55,8 +47,8 @@ export class FrameParser {
     return { fin: isFin, rsv, opCode };
   }
 
-  private getSecondByteData(): SecondByteData {
-    const secondByte = this.buffer.readUInt8();
+  private getSecondByteData(): SecondByte {
+    const secondByte = this.buffer.readUInt8(this.offset);
     this.offset++;
 
     const mask = (secondByte & 0x80) === 0x80;
@@ -65,13 +57,22 @@ export class FrameParser {
     return { mask, payloadLength };
   }
 
-  private moveOffsetIfPayloadTooLong(payloadLength: number) {
-    if (payloadLength === 126) {
-      payloadLength = this.buffer.readUInt16BE(this.offset); // read 2 bytes
+  private adjustPayloadLength(length: number): number {
+    if (length === 126) {
+      const extended = this.buffer.readUInt16BE(this.offset);
       this.offset += 2;
-    } else if (payloadLength === 127) {
-      payloadLength = this.buffer.readUInt32BE(this.offset); // read 4 bytes
+      return extended;
+    } else if (length === 127) {
+      const extended = this.buffer.readUInt32BE(this.offset);
       this.offset += 4;
+      return extended;
+    }
+    return length;
+  }
+
+  private decodePayload(payload: Buffer, maskKey: Buffer) {
+    for (let i = 0; i < payload.length; i++) {
+      payload[i] ^= maskKey[i % 4];
     }
   }
 }
