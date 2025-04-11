@@ -21,19 +21,19 @@ export class WebSocketServer {
     });
   }
 
-  public close() {
+  public close(): void {
     this.httpServer.close((err) => {
       throw new Error(`Error closing server: ${err}`);
     });
   }
 
-  private connectionHandler() {
+  private connectionHandler(): void {
     this.httpServer.on("upgrade", (req, socket, head) => {
       if (!this.validateClient(req, socket)) {
         return;
       }
       this.connectClient(socket, req.headers);
-      this.subscribeToEvents(socket);
+      this.subscribeOnEvents(socket);
       socket.write(this.frameEncoder.encode("Hi there!"));
     });
   }
@@ -50,7 +50,6 @@ export class WebSocketServer {
   }
 
   private connectClient(socket: Stream.Duplex, headers: IncomingHttpHeaders) {
-    // TODO: move to a separate method
     const clientSecWsKey = headers[HandshakeHeaders.SecWebSocketKey];
     if (!clientSecWsKey) {
       socket.end("HTTP/1.1 400 Bad Request");
@@ -58,12 +57,12 @@ export class WebSocketServer {
       return;
     }
 
-    const secWsAcceptHeader = this.generateAcceptValue(clientSecWsKey);
+    const secWsAcceptHeaderValue = this.generateAcceptValue(clientSecWsKey);
     socket.write(
       `HTTP/1.1 101 Switching Protocols\r\n` +
         `${HandshakeHeaders.Upgrade}: ${HandshakeHeadersValues.Upgrade}\r\n` +
         `${HandshakeHeaders.Connection}: ${HandshakeHeadersValues.Connection}\r\n` +
-        `${HandshakeHeaders.SecWebSocketAccept}: ${secWsAcceptHeader}\r\n\r\n`
+        `${HandshakeHeaders.SecWebSocketAccept}: ${secWsAcceptHeaderValue}\r\n\r\n`
     );
   }
 
@@ -75,27 +74,35 @@ export class WebSocketServer {
       .digest("base64");
   }
 
-  private subscribeToEvents(socket: Stream.Duplex) {
+  private subscribeOnEvents(socket: Stream.Duplex) {
+    this.onData(socket);
+    this.onError(socket);
+  }
+
+  private onData(socket: Stream.Duplex): void {
     socket.on("data", (buffer) => {
       console.log("Raw data: ", buffer);
       this.parseFrame(buffer);
     });
+  }
+
+  private onError(socket: Stream.Duplex): void {
     socket.on("error", (err) => {
       console.error("Socket error: ", err);
     });
   }
 
-  private parseFrame(buffer: Buffer) {
+  private parseFrame(buffer: Buffer): void {
     try {
       const parser = new FrameParser(buffer);
       const frame = parser.parse();
-      this.LogAndHandleOpCode(frame);
+      this.HandleOpCodeAndLog(frame);
     } catch (err) {
       console.error("Error parsing frame:", err);
     }
   }
 
-  private LogAndHandleOpCode(frame: ParsedFrame) {
+  private HandleOpCodeAndLog(frame: ParsedFrame): void {
     if (frame.opCode === OpCodes.TEXT) {
       console.log("Received message: ", frame.payload);
     } else if (frame.opCode === OpCodes.BINARY) {

@@ -39,11 +39,10 @@ export class HandshakeHeadersValidator {
     }
   }
 
-  private validateSecWebSocketKey(): string {
+  private validateSecWebSocketKey(): void {
     const wsKey = this.headers[HandshakeHeaders.SecWebSocketKey];
     if (!wsKey || typeof wsKey !== "string" || wsKey.trim().length === 0) {
       throw new Error("Missing or invalid 'Sec-WebSocket-Key' header");
     }
-    return wsKey;
   }
 }
